@@ -3,11 +3,13 @@ version: 0.2
 phases:
   build:
     commands:
-      - echo "Build step started"
-      - ls
-      - echo "Build step completed"
+      - echo "Packaging producer lambda"
+      - cd lambdas/producer
+      - zip -r ../../producer.zip .
+      - cd ../../
+      - echo "Uploading producer.zip to S3"
+      - aws s3 cp producer.zip s3://$ARTIFACT_BUCKET/lambdas/producer.zip
 
 artifacts:
   files:
-    - template.yaml
-    - statemachine.asl.json
+    - infra/template.yaml

@@ -1,10 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Earthquake Step Function
+Description: Earthquake Step Function with Producer Lambda
 
 Resources:
-  # -------------------------
-  # Step Function IAM Role
-  # -------------------------
+  # -------------------------------------------------
+  # S3 bucket to store Lambda artifacts (zip files)
+  # -------------------------------------------------
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+
+  # -------------------------------------------------
+  # IAM Role for Step Functions
+  # -------------------------------------------------
   StepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -27,9 +33,9 @@ Resources:
                   - sns:Publish
                 Resource: "*"
 
-  # -------------------------
-  # Lambda Execution Role
-  # -------------------------
+  # -------------------------------------------------
+  # IAM Role for Lambda
+  # -------------------------------------------------
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -43,9 +49,9 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  # -------------------------
-  # Producer Lambda (TEMP INLINE CODE)
-  # -------------------------
+  # -------------------------------------------------
+  # Producer Lambda (code comes from S3)
+  # -------------------------------------------------
   ProducerLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -54,14 +60,14 @@ Resources:
       Handler: app.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
-        ZipFile: |
-          def lambda_handler(event, context):
-              print("Producer lambda deployed via CloudFormation")
-              return {"status": "ok"}
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: lambdas/producer.zip
+      Timeout: 60
+      MemorySize: 256
 
-  # -------------------------
+  # -------------------------------------------------
   # Step Function
-  # -------------------------
+  # -------------------------------------------------
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
