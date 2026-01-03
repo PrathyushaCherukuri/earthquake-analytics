@@ -1,15 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Earthquake data pipeline with Lambda, Kinesis, Glue, Step Functions, SNS, and EventBridge
+Description: Earthquake end-to-end pipeline (Lambda, Kinesis, Glue, Step Functions, EventBridge, SNS)
+
+Resources:
 
 ############################
 # IAM ROLES
 ############################
 
-Resources:
-
-  ############################
-  # Lambda Execution Role
-  ############################
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -23,7 +20,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: LambdaKinesisS3Policy
+        - PolicyName: LambdaKinesisS3SNSPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -34,15 +31,12 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:PutObject
-                Resource: "arn:aws:s3:::prathyusha-project/raw/*"
+                Resource: arn:aws:s3:::prathyusha-project/raw/*
               - Effect: Allow
                 Action:
                   - sns:Publish
-                Resource: !Ref EarthquakeSNSTopic
+                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
-  ############################
-  # Step Function Role
-  ############################
   StepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -61,8 +55,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
-                Resource:
-                  - !GetAtt ProducerLambda.Arn
+                Resource: !GetAtt ProducerLambda.Arn
               - Effect: Allow
                 Action:
                   - glue:StartJobRun
@@ -70,11 +63,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - sns:Publish
-                Resource: !Ref EarthquakeSNSTopic
+                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
-  ############################
-  # EventBridge Invoke Role
-  ############################
   EventBridgeInvokeStepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -104,15 +94,6 @@ Resources:
     Properties:
       Name: prathyusha-earthquake-stream
       ShardCount: 1
-
-############################
-# SNS
-############################
-
-  EarthquakeSNSTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: earthquake-alerts
 
 ############################
 # LAMBDAS
@@ -154,28 +135,10 @@ Resources:
       BatchSize: 100
 
 ############################
-# GLUE JOBS
+# GLUE JOBS (REFERENCED)
 ############################
-
-  RawToCuratedGlueJob:
-    Type: AWS::Glue::Job
-    Properties:
-      Name: prathyusha-earthquake-raw-to-curated
-      Role: AWSGlueServiceRoleDefault
-      Command:
-        Name: glueetl
-        ScriptLocation: s3://prathyusha-project/glue/raw_to_curated.py
-        PythonVersion: "3"
-
-  CuratedLatestGlueJob:
-    Type: AWS::Glue::Job
-    Properties:
-      Name: prathyusha-earthquake-raw-to-curated_latest
-      Role: AWSGlueServiceRoleDefault
-      Command:
-        Name: glueetl
-        ScriptLocation: s3://prathyusha-project/glue/raw_to_curated_latest.py
-        PythonVersion: "3"
+# NOTE: Glue scripts already exist in S3.
+# CloudFormation just references job names.
 
 ############################
 # STEP FUNCTION
@@ -188,7 +151,7 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
-          "Comment": "Earthquake pipeline",
+          "Comment": "Earthquake pipeline with retries and alerts",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
@@ -197,28 +160,28 @@ Resources:
               "Parameters": {
                 "FunctionName": "prathyusha-earthquake-producer"
               },
-              "Retry": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "IntervalSeconds": 5,
-                  "MaxAttempts": 3,
-                  "BackoffRate": 2
-                }
-              ],
+              "Retry": [{
+                "ErrorEquals": ["States.ALL"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }],
               "Catch": [{
                 "ErrorEquals": ["States.ALL"],
                 "Next": "NotifyFailure"
               }],
-              "Next": "Wait"
+              "Next": "WaitForIngestion"
             },
-            "Wait": {
+
+            "WaitForIngestion": {
               "Type": "Wait",
               "Seconds": 60,
               "Next": "RunRawToCurated"
             },
+
             "RunRawToCurated": {
               "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated"
               },
@@ -228,20 +191,27 @@ Resources:
               }],
               "Next": "RunCuratedLatest"
             },
+
             "RunCuratedLatest": {
               "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated_latest"
               },
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "Next": "NotifyFailure"
+              }],
               "End": true
             },
+
             "NotifyFailure": {
               "Type": "Task",
               "Resource": "arn:aws:states:::sns:publish",
               "Parameters": {
                 "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
-                "Message": "❌ Earthquake pipeline failed"
+                "Subject": "❌ Earthquake Pipeline Failed",
+                "Message": "Step Function execution failed. Check CloudWatch logs."
               },
               "End": true
             }
