@@ -59,6 +59,10 @@ Resources:
         S3Key: lambdas/producer.zip
       Timeout: 60
       MemorySize: 256
+      Environment:
+        Variables:
+          KINESIS_STREAM_NAME: prathyusha-earthquake-stream
+          USGS_URL: https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson
 
   # -------------------------------------------------
   # Step Function
