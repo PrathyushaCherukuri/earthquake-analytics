@@ -3,11 +3,13 @@ version: 0.2
 phases:
   build:
     commands:
+      - echo "Reading artifact bucket from pipeline variable"
+      - export ARTIFACT_BUCKET=#{variables.ARTIFACT_BUCKET}
       - echo "Packaging producer lambda"
       - cd lambdas/producer
       - zip -r ../../producer.zip .
       - cd ../../
-      - echo "Uploading producer.zip to S3"
+      - echo "Uploading to S3 bucket: $ARTIFACT_BUCKET"
       - aws s3 cp producer.zip s3://$ARTIFACT_BUCKET/lambdas/producer.zip
 
 artifacts:
