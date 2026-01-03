@@ -1,47 +1,30 @@
-AWSTemplateFormatVersion: "2010-09-09"
-Description: Earthquake end-to-end pipeline (Lambda, Kinesis, Glue, Step Functions, EventBridge, SNS)
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Earthquake pipeline – Lambda, Step Functions, Glue, SNS (uses existing Kinesis)
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket where CodeBuild uploads Lambda artifacts
 
 Resources:
-
-############################
-# IAM ROLES
-############################
-
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
+  #################################################
+  # SNS (existing topic – DO NOT recreate)
+  #################################################
+  EarthquakeSNSTopic:
+    Type: AWS::SNS::Topic
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: LambdaKinesisS3SNSPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - kinesis:PutRecords
-                Resource: !GetAtt EarthquakeStream.Arn
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                Resource: arn:aws:s3:::prathyusha-project/raw/*
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+      TopicName: earthquake-alerts
 
+  #################################################
+  # IAM Role for Step Function
+  #################################################
   StepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -50,100 +33,114 @@ Resources:
       Policies:
         - PolicyName: StepFunctionPolicy
           PolicyDocument:
-            Version: "2012-10-17"
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
-                Resource: !GetAtt ProducerLambda.Arn
-              - Effect: Allow
-                Action:
                   - glue:StartJobRun
-                Resource: "*"
-              - Effect: Allow
-                Action:
                   - sns:Publish
-                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+                Resource: "*"
 
-  EventBridgeInvokeStepFunctionRole:
+  #################################################
+  # IAM Role for Producer Lambda
+  #################################################
+  ProducerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service: events.amazonaws.com
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: AllowStartExecution
+        - PolicyName: ProducerKinesisPolicy
           PolicyDocument:
-            Version: "2012-10-17"
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - states:StartExecution
-                Resource: !Ref EarthquakeStateMachine
+                  - kinesis:PutRecords
+                Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
 
-############################
-# KINESIS
-############################
-
-  EarthquakeStream:
-    Type: AWS::Kinesis::Stream
-    Properties:
-      Name: prathyusha-earthquake-stream
-      ShardCount: 1
-
-############################
-# LAMBDAS
-############################
-
+  #################################################
+  # Producer Lambda
+  #################################################
   ProducerLambda:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: prathyusha-earthquake-producer
       Runtime: python3.11
       Handler: app.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 60
+      Role: !GetAtt ProducerLambdaExecutionRole.Arn
       Code:
-        S3Bucket: !Sub "codepipeline-${AWS::Region}-${AWS::AccountId}"
+        S3Bucket: !Ref ArtifactBucket
         S3Key: lambdas/producer.zip
+      Timeout: 60
+      MemorySize: 256
       Environment:
         Variables:
           KINESIS_STREAM_NAME: prathyusha-earthquake-stream
 
+  #################################################
+  # IAM Role for Consumer Lambda
+  #################################################
+  ConsumerLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ConsumerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+
+  #################################################
+  # Consumer Lambda
+  #################################################
   ConsumerLambda:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: prathyusha-earthquake-consumer
       Runtime: python3.11
       Handler: app.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 60
+      Role: !GetAtt ConsumerLambdaExecutionRole.Arn
       Code:
-        S3Bucket: !Sub "codepipeline-${AWS::Region}-${AWS::AccountId}"
+        S3Bucket: !Ref ArtifactBucket
         S3Key: lambdas/consumer.zip
+      Timeout: 60
+      MemorySize: 256
 
+  #################################################
+  # Kinesis → Consumer mapping (existing stream)
+  #################################################
   ConsumerKinesisMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
-      EventSourceArn: !GetAtt EarthquakeStream.Arn
+      EventSourceArn: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
       FunctionName: !Ref ConsumerLambda
       StartingPosition: LATEST
       BatchSize: 100
 
-############################
-# GLUE JOBS (REFERENCED)
-############################
-# NOTE: Glue scripts already exist in S3.
-# CloudFormation just references job names.
-
-############################
-# STEP FUNCTION
-############################
-
+  #################################################
+  # Step Function
+  #################################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -151,77 +148,68 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
-          "Comment": "Earthquake pipeline with retries and alerts",
+          "Comment": "Earthquake pipeline",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {
-                "FunctionName": "prathyusha-earthquake-producer"
+                "FunctionName": "prathyusha-earthquake-producer",
+                "Payload": {}
               },
-              "Retry": [{
-                "ErrorEquals": ["States.ALL"],
-                "IntervalSeconds": 5,
-                "MaxAttempts": 3,
-                "BackoffRate": 2
-              }],
-              "Catch": [{
-                "ErrorEquals": ["States.ALL"],
-                "Next": "NotifyFailure"
-              }],
-              "Next": "WaitForIngestion"
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "Next": "Wait"
             },
-
-            "WaitForIngestion": {
+            "Wait": {
               "Type": "Wait",
               "Seconds": 60,
               "Next": "RunRawToCurated"
             },
-
             "RunRawToCurated": {
               "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Resource": "arn:aws:states:::glue:startJobRun",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated"
               },
-              "Catch": [{
-                "ErrorEquals": ["States.ALL"],
-                "Next": "NotifyFailure"
-              }],
               "Next": "RunCuratedLatest"
             },
-
             "RunCuratedLatest": {
               "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Resource": "arn:aws:states:::glue:startJobRun",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated_latest"
               },
-              "Catch": [{
-                "ErrorEquals": ["States.ALL"],
-                "Next": "NotifyFailure"
-              }],
               "End": true
             },
-
             "NotifyFailure": {
               "Type": "Task",
               "Resource": "arn:aws:states:::sns:publish",
               "Parameters": {
                 "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
-                "Subject": "❌ Earthquake Pipeline Failed",
-                "Message": "Step Function execution failed. Check CloudWatch logs."
+                "Message": "Earthquake pipeline failed"
               },
               "End": true
             }
           }
         }
 
-############################
-# EVENTBRIDGE SCHEDULE
-############################
-
+  #################################################
+  # Scheduled trigger (EventBridge)
+  #################################################
   EarthquakePipelineSchedule:
     Type: AWS::Events::Rule
     Properties:
@@ -229,5 +217,9 @@ Resources:
       State: ENABLED
       Targets:
         - Arn: !Ref EarthquakeStateMachine
-          Id: EarthquakePipelineTarget
-          RoleArn: !GetAtt EventBridgeInvokeStepFunctionRole.Arn
+          Id: EarthquakeStepFunctionTarget
+          RoleArn: !GetAtt StepFunctionRole.Arn
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref EarthquakeStateMachine
