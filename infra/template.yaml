@@ -2,6 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Earthquake Step Function
 
 Resources:
+  # -------------------------
+  # Step Function IAM Role
+  # -------------------------
   StepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -24,6 +27,41 @@ Resources:
                   - sns:Publish
                 Resource: "*"
 
+  # -------------------------
+  # Lambda Execution Role
+  # -------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # -------------------------
+  # Producer Lambda (TEMP INLINE CODE)
+  # -------------------------
+  ProducerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: prathyusha-earthquake-producer
+      Runtime: python3.11
+      Handler: app.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              print("Producer lambda deployed via CloudFormation")
+              return {"status": "ok"}
+
+  # -------------------------
+  # Step Function
+  # -------------------------
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
