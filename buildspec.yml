@@ -3,8 +3,6 @@ version: 0.2
 phases:
   build:
     commands:
-      - echo "Reading artifact bucket from pipeline variable"
-      - export ARTIFACT_BUCKET=#{variables.ARTIFACT_BUCKET}
       - echo "Packaging producer lambda"
       - cd lambdas/producer
       - zip -r ../../producer.zip .
