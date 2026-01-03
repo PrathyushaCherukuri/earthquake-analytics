@@ -22,6 +22,11 @@ phases:
       - echo Uploading Glue scripts
       - aws s3 cp glue/raw_to_curated.py s3://$ARTIFACT_BUCKET/glue/raw_to_curated.py
 
+      - echo Uploading Glue scripts
+      - aws s3 cp glue/raw_to_curated.py s3://$ARTIFACT_BUCKET/glue/raw_to_curated.py
+      - aws s3 cp glue/raw_to_curated_latest.py s3://$ARTIFACT_BUCKET/glue/raw_to_curated_latest.py
+
+
 artifacts:
   files:
     - infra/template.yaml
