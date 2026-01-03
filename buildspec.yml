@@ -19,6 +19,9 @@ phases:
       - echo Uploading consumer to S3 bucket $ARTIFACT_BUCKET
       - aws s3 cp consumer.zip s3://$ARTIFACT_BUCKET/lambdas/consumer.zip
 
+      - echo Uploading Glue scripts
+      - aws s3 cp glue/raw_to_curated.py s3://$ARTIFACT_BUCKET/glue/raw_to_curated.py
+
 artifacts:
   files:
     - infra/template.yaml
