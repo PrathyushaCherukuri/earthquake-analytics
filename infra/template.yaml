@@ -163,6 +163,27 @@ Resources:
 
 
   ##################################
+  # GLUE JOB: CURATED → LATEST  (NEW)
+  ##################################
+  CuratedLatestGlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: prathyusha-earthquake-raw-to-curated_latest
+      Role: !GetAtt GlueJobRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub s3://${ARTIFACT_BUCKET}/glue/raw_to_curated_latest.py
+        PythonVersion: 3
+      DefaultArguments:
+        --job-language: python
+        --enable-continuous-cloudwatch-log: "true"
+        --enable-metrics: "true"
+      GlueVersion: "4.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+
+
+  ##################################
   # IAM ROLE: STEP FUNCTION
   ##################################
   StepFunctionRole:
@@ -189,7 +210,7 @@ Resources:
 
 
   ##################################
-  # STEP FUNCTION
+  # STEP FUNCTION (UPDATED)
   ##################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -214,6 +235,14 @@ Resources:
               "Resource": "arn:aws:states:::glue:startJobRun",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated"
+              },
+              "Next": "RunCuratedLatest"
+            },
+            "RunCuratedLatest": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Parameters": {
+                "JobName": "prathyusha-earthquake-raw-to-curated_latest"
               },
               "End": true
             }
