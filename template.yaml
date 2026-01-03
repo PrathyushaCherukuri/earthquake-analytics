@@ -12,11 +12,17 @@ Resources:
             Principal:
               Service: states.amazonaws.com
             Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess
-        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
-        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
-        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+      Policies:
+        - PolicyName: StepFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                  - glue:StartJobRun
+                  - sns:Publish
+                Resource: "*"
 
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -24,4 +30,81 @@ Resources:
       StateMachineName: earthquake-pipeline
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
-        REPLACE_ME
+        {
+          "Comment": "Earthquake pipeline with retries and SNS failure notification",
+          "QueryLanguage": "JSONata",
+          "StartAt": "InvokeProducer",
+          "States": {
+            "InvokeProducer": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Arguments": {
+                "FunctionName": "arn:aws:lambda:eu-west-2:430006376054:function:prathyusha-earthquake-producer",
+                "Payload": {}
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "Next": "Wait"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 60,
+              "Next": "RunCuratedHistoryJob"
+            },
+            "RunCuratedHistoryJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Arguments": {
+                "JobName": "prathyusha-earthquake-raw-to-curated"
+              },
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "Next": "RunCuratedLatestJob"
+            },
+            "RunCuratedLatestJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Arguments": {
+                "JobName": "prathyusha-earthquake-raw-to-curated_latest"
+              },
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "End": true
+            },
+            "NotifyFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Arguments": {
+                "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
+                "Subject": "❌ Earthquake Pipeline Failed",
+                "Message": "The earthquake Step Function execution has failed. Please check CloudWatch Logs for details."
+              },
+              "End": true
+            }
+          }
+        }
