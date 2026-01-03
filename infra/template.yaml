@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Earthquake End-to-End Streaming Pipeline with Retries and Alerts
+Description: Earthquake End-to-End Streaming Pipeline with Schedule, Retries, and Alerts
 
 Resources:
 
@@ -253,7 +253,6 @@ Resources:
               ],
               "Next": "RunRawToCurated"
             },
-
             "RunRawToCurated": {
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun",
@@ -276,7 +275,6 @@ Resources:
               ],
               "Next": "RunCuratedLatest"
             },
-
             "RunCuratedLatest": {
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun",
@@ -299,7 +297,6 @@ Resources:
               ],
               "End": true
             },
-
             "NotifyFailure": {
               "Type": "Task",
               "Resource": "arn:aws:states:::sns:publish",
@@ -312,3 +309,43 @@ Resources:
             }
           }
         }
+
+
+  ##################################
+  # IAM ROLE: EVENTBRIDGE → STEP FUNCTION
+  ##################################
+  EventBridgeStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowStartStepFunction
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref EarthquakeStateMachine
+
+
+  ##################################
+  # EVENTBRIDGE SCHEDULE TRIGGER
+  ##################################
+  EarthquakePipelineSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: earthquake-pipeline-schedule
+      Description: Run earthquake pipeline every 15 minutes
+      ScheduleExpression: rate(15 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref EarthquakeStateMachine
+          Id: StepFunctionTarget
+          RoleArn: !GetAtt EventBridgeStepFunctionRole.Arn
