@@ -1,12 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Earthquake Streaming Pipeline (Producer, Consumer, Step Function)
+Description: Earthquake End-to-End Streaming Pipeline
 
 Resources:
 
-  ############################
-  # IAM ROLE FOR PRODUCER
-  ############################
-  LambdaExecutionRole:
+  ##################################
+  # IAM ROLE: PRODUCER LAMBDA
+  ##################################
+  ProducerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -16,10 +16,8 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
       Policies:
         - PolicyName: ProducerKinesisWritePolicy
           PolicyDocument:
@@ -33,16 +31,16 @@ Resources:
                 Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
 
 
-  ############################
+  ##################################
   # PRODUCER LAMBDA
-  ############################
+  ##################################
   ProducerLambda:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: prathyusha-earthquake-producer
       Runtime: python3.11
       Handler: app.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
+      Role: !GetAtt ProducerLambdaExecutionRole.Arn
       Timeout: 60
       MemorySize: 256
       Code:
@@ -54,9 +52,9 @@ Resources:
           USGS_URL: https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson
 
 
-  ############################
-  # IAM ROLE FOR CONSUMER
-  ############################
+  ##################################
+  # IAM ROLE: CONSUMER LAMBDA
+  ##################################
   ConsumerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -67,12 +65,10 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
       Policies:
-        - PolicyName: ConsumerReadKinesisPolicy
+        - PolicyName: ConsumerKinesisReadPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -85,9 +81,9 @@ Resources:
                 Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
 
 
-  ############################
+  ##################################
   # CONSUMER LAMBDA
-  ############################
+  ##################################
   ConsumerLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -102,9 +98,9 @@ Resources:
         S3Key: lambdas/consumer.zip
 
 
-  ############################
+  ##################################
   # KINESIS → CONSUMER TRIGGER
-  ############################
+  ##################################
   ConsumerKinesisMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
@@ -115,9 +111,60 @@ Resources:
       Enabled: true
 
 
-  ############################
-  # STEP FUNCTION ROLE
-  ############################
+  ##################################
+  # IAM ROLE: GLUE JOBS
+  ##################################
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: GlueS3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::prathyusha-project
+                  - arn:aws:s3:::prathyusha-project/*
+
+
+  ##################################
+  # GLUE JOB: RAW → CURATED
+  ##################################
+  RawToCuratedGlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: prathyusha-earthquake-raw-to-curated
+      Role: !GetAtt GlueJobRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub s3://${ARTIFACT_BUCKET}/glue/raw_to_curated.py
+        PythonVersion: 3
+      DefaultArguments:
+        --job-language: python
+        --enable-continuous-cloudwatch-log: "true"
+        --enable-metrics: "true"
+      GlueVersion: "4.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+
+
+  ##################################
+  # IAM ROLE: STEP FUNCTION
+  ##################################
   StepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -141,9 +188,9 @@ Resources:
                 Resource: "*"
 
 
-  ############################
+  ##################################
   # STEP FUNCTION
-  ############################
+  ##################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -151,7 +198,7 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
-          "Comment": "Earthquake pipeline with retries and SNS failure notification",
+          "Comment": "Earthquake pipeline",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
@@ -160,15 +207,15 @@ Resources:
               "Parameters": {
                 "FunctionName": "prathyusha-earthquake-producer"
               },
-              "Next": "Wait"
+              "Next": "RunRawToCurated"
             },
-            "Wait": {
-              "Type": "Wait",
-              "Seconds": 60,
-              "Next": "Success"
-            },
-            "Success": {
-              "Type": "Succeed"
+            "RunRawToCurated": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Parameters": {
+                "JobName": "prathyusha-earthquake-raw-to-curated"
+              },
+              "End": true
             }
           }
         }
