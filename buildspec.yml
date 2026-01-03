@@ -3,11 +3,11 @@ version: 0.2
 phases:
   build:
     commands:
-      - echo "Packaging producer lambda"
+      - echo Packaging producer lambda
       - cd lambdas/producer
       - zip -r ../../producer.zip .
       - cd ../../
-      - echo "Uploading to S3 bucket: $ARTIFACT_BUCKET"
+      - echo Uploading to S3 bucket $ARTIFACT_BUCKET
       - aws s3 cp producer.zip s3://$ARTIFACT_BUCKET/lambdas/producer.zip
 
 artifacts:
