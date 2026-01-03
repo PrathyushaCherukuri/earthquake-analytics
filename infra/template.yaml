@@ -46,14 +46,17 @@ Resources:
       - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
     Policies:
-      - PolicyName: LambdaKinesisWritePolicy
+      - PolicyName: LambdaKinesisWritePolicyV2   # 👈 name changed (IMPORTANT)
         PolicyDocument:
           Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action:
                 - kinesis:PutRecords
+                - kinesis:PutRecord          # 👈 add this
+                - kinesis:DescribeStream     # 👈 add this
               Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
+
 
   # -------------------------------------------------
   # Producer Lambda (code comes from S3)
