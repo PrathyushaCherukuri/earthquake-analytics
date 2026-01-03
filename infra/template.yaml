@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Earthquake pipeline – Lambda, Step Functions, Glue, SNS (uses existing Kinesis)
+Description: Earthquake pipeline – Lambda, Step Functions, Glue, SNS (existing infra)
 
 Parameters:
   ArtifactBucket:
@@ -7,18 +7,9 @@ Parameters:
     Description: S3 bucket where CodeBuild uploads Lambda artifacts
 
 Resources:
-  #################################################
-  # SNS (existing topic – DO NOT recreate)
-  #################################################
-  EarthquakeSNSTopic:
-    Type: AWS::SNS::Topic
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TopicName: earthquake-alerts
 
   #################################################
-  # IAM Role for Step Function
+  # IAM Role for Step Functions
   #################################################
   StepFunctionRole:
     Type: AWS::IAM::Role
@@ -43,7 +34,7 @@ Resources:
                 Resource: "*"
 
   #################################################
-  # IAM Role for Producer Lambda
+  # Producer Lambda IAM Role
   #################################################
   ProducerLambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -87,7 +78,7 @@ Resources:
           KINESIS_STREAM_NAME: prathyusha-earthquake-stream
 
   #################################################
-  # IAM Role for Consumer Lambda
+  # Consumer Lambda IAM Role
   #################################################
   ConsumerLambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -102,7 +93,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: ConsumerPolicy
+        - PolicyName: ConsumerSNSPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -128,7 +119,7 @@ Resources:
       MemorySize: 256
 
   #################################################
-  # Kinesis → Consumer mapping (existing stream)
+  # Kinesis → Consumer mapping
   #################################################
   ConsumerKinesisMapping:
     Type: AWS::Lambda::EventSourceMapping
@@ -139,7 +130,7 @@ Resources:
       BatchSize: 100
 
   #################################################
-  # Step Function
+  # Step Function Definition
   #################################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -148,7 +139,7 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
-          "Comment": "Earthquake pipeline",
+          "Comment": "Earthquake end-to-end pipeline",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
@@ -158,20 +149,16 @@ Resources:
                 "FunctionName": "prathyusha-earthquake-producer",
                 "Payload": {}
               },
-              "Retry": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "IntervalSeconds": 5,
-                  "MaxAttempts": 3,
-                  "BackoffRate": 2
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "Next": "NotifyFailure"
-                }
-              ],
+              "Retry": [{
+                "ErrorEquals": ["States.ALL"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }],
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "Next": "NotifyFailure"
+              }],
               "Next": "Wait"
             },
             "Wait": {
@@ -200,7 +187,7 @@ Resources:
               "Resource": "arn:aws:states:::sns:publish",
               "Parameters": {
                 "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
-                "Message": "Earthquake pipeline failed"
+                "Message": "❌ Earthquake pipeline failed. Check CloudWatch logs."
               },
               "End": true
             }
@@ -208,7 +195,7 @@ Resources:
         }
 
   #################################################
-  # Scheduled trigger (EventBridge)
+  # Scheduled trigger
   #################################################
   EarthquakePipelineSchedule:
     Type: AWS::Events::Rule
@@ -217,7 +204,7 @@ Resources:
       State: ENABLED
       Targets:
         - Arn: !Ref EarthquakeStateMachine
-          Id: EarthquakeStepFunctionTarget
+          Id: EarthquakePipelineTarget
           RoleArn: !GetAtt StepFunctionRole.Arn
 
 Outputs:
