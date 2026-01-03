@@ -2,11 +2,6 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Earthquake Step Function with Producer Lambda
 
 Resources:
-  # -------------------------------------------------
-  # S3 bucket to store Lambda artifacts (zip files)
-  # -------------------------------------------------
-  ArtifactBucket:
-    Type: AWS::S3::Bucket
 
   # -------------------------------------------------
   # IAM Role for Step Functions
@@ -60,7 +55,7 @@ Resources:
       Handler: app.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
-        S3Bucket: !Ref ArtifactBucket
+        S3Bucket: earthquake-pipeline-artifacts
         S3Key: lambdas/producer.zip
       Timeout: 60
       MemorySize: 256
