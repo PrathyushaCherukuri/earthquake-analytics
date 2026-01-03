@@ -1,7 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Earthquake End-to-End Streaming Pipeline
+Description: Earthquake End-to-End Streaming Pipeline with Retries and Alerts
 
 Resources:
+
+  ##################################
+  # SNS TOPIC FOR ALERTS
+  ##################################
+  EarthquakeAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: earthquake-alerts
+
 
   ##################################
   # IAM ROLE: PRODUCER LAMBDA
@@ -163,7 +172,7 @@ Resources:
 
 
   ##################################
-  # GLUE JOB: CURATED → LATEST  (NEW)
+  # GLUE JOB: CURATED → LATEST
   ##################################
   CuratedLatestGlueJob:
     Type: AWS::Glue::Job
@@ -210,7 +219,7 @@ Resources:
 
 
   ##################################
-  # STEP FUNCTION (UPDATED)
+  # STEP FUNCTION WITH RETRIES + ALERTS
   ##################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -219,7 +228,7 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
-          "Comment": "Earthquake pipeline",
+          "Comment": "Earthquake pipeline with retries and alerts",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
@@ -228,21 +237,76 @@ Resources:
               "Parameters": {
                 "FunctionName": "prathyusha-earthquake-producer"
               },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
               "Next": "RunRawToCurated"
             },
+
             "RunRawToCurated": {
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated"
               },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
               "Next": "RunCuratedLatest"
             },
+
             "RunCuratedLatest": {
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun",
               "Parameters": {
                 "JobName": "prathyusha-earthquake-raw-to-curated_latest"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "End": true
+            },
+
+            "NotifyFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
+                "Subject": "❌ Earthquake Pipeline Failed",
+                "Message": "The earthquake pipeline failed. Please check Step Functions and CloudWatch logs."
               },
               "End": true
             }
