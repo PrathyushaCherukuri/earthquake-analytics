@@ -83,27 +83,35 @@ Resources:
   ConsumerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-    AssumeRolePolicyDocument:
-      Version: '2012-10-17'
-      Statement:
-        - Effect: Allow
-          Principal:
-            Service: lambda.amazonaws.com
-          Action: sts:AssumeRole
+      RoleName: earthquake-consumer-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
     ManagedPolicyArns:
       - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
     Policies:
-      - PolicyName: ConsumerSNSAndKinesisPolicy
+      - PolicyName: ConsumerPermissions
         PolicyDocument:
           Version: '2012-10-17'
           Statement:
-            # 🔔 SNS
+            # DynamoDB write
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:DescribeTable
+              Resource: !GetAtt EarthquakeTable.Arn
+
+            # SNS publish
             - Effect: Allow
               Action:
                 - sns:Publish
               Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
-            # 📥 Kinesis READ (THIS WAS MISSING)
+            # Kinesis read (REQUIRED for EventSourceMapping)
             - Effect: Allow
               Action:
                 - kinesis:GetRecords
@@ -113,7 +121,6 @@ Resources:
                 - kinesis:ListShards
                 - kinesis:ListStreams
               Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
-
 
   #################################################
   # Consumer Lambda
