@@ -1,15 +1,15 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Earthquake pipeline – Lambda, Step Functions, Glue, SNS (existing infra)
+Description: Earthquake streaming pipeline with Step Functions, Lambda, Kinesis, Glue, DynamoDB, SNS
 
 Parameters:
   ArtifactBucket:
     Type: String
-    Description: S3 bucket where CodeBuild uploads Lambda artifacts
+    Description: S3 bucket used by CodePipeline to store Lambda artifacts
 
 Resources:
 
   #################################################
-  # DynamoDB (REQUIRED)
+  # DynamoDB
   #################################################
   EarthquakeTable:
     Type: AWS::DynamoDB::Table
@@ -24,7 +24,7 @@ Resources:
           KeyType: HASH
 
   #################################################
-  # IAM Role for Step Functions
+  # IAM Role — Step Functions
   #################################################
   StepFunctionRole:
     Type: AWS::IAM::Role
@@ -52,7 +52,7 @@ Resources:
                 Resource: "*"
 
   #################################################
-  # Producer Lambda IAM Role
+  # IAM Role — Producer Lambda
   #################################################
   ProducerLambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -96,7 +96,7 @@ Resources:
           KINESIS_STREAM_NAME: prathyusha-earthquake-stream
 
   #################################################
-  # Consumer Lambda IAM Role (FIXED)
+  # IAM Role — Consumer Lambda
   #################################################
   ConsumerLambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -166,7 +166,7 @@ Resources:
           SNS_TOPIC_ARN: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
   #################################################
-  # Kinesis → Consumer mapping
+  # Kinesis → Consumer trigger
   #################################################
   ConsumerKinesisMapping:
     Type: AWS::Lambda::EventSourceMapping
@@ -178,7 +178,7 @@ Resources:
       Enabled: true
 
   #################################################
-  # Step Function
+  # Step Function — FULL LOGIC RESTORED
   #################################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -187,6 +187,7 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
+          "Comment": "Earthquake pipeline with retries and SNS failure notification",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
@@ -194,6 +195,72 @@ Resources:
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {
                 "FunctionName": "prathyusha-earthquake-producer"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "Next": "WaitForData"
+            },
+
+            "WaitForData": {
+              "Type": "Wait",
+              "Seconds": 60,
+              "Next": "RunCuratedHistoryJob"
+            },
+
+            "RunCuratedHistoryJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Parameters": {
+                "JobName": "prathyusha-earthquake-raw-to-curated"
+              },
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "Next": "RunCuratedLatestJob"
+            },
+
+            "RunCuratedLatestJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun",
+              "Parameters": {
+                "JobName": "prathyusha-earthquake-raw-to-curated_latest"
+              },
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ],
+              "End": true
+            },
+
+            "NotifyFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
+                "Subject": "❌ Earthquake Pipeline Failed",
+                "Message": "The earthquake Step Function execution failed. Check CloudWatch logs."
               },
               "End": true
             }
@@ -216,3 +283,5 @@ Resources:
 Outputs:
   StateMachineArn:
     Value: !Ref EarthquakeStateMachine
+  DynamoDBTable:
+    Value: !Ref EarthquakeTable
