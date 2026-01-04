@@ -83,24 +83,37 @@ Resources:
   ConsumerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: ConsumerSNSPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+    AssumeRolePolicyDocument:
+      Version: '2012-10-17'
+      Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+    ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+    Policies:
+      - PolicyName: ConsumerSNSAndKinesisPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            # 🔔 SNS
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+
+            # 📥 Kinesis READ (THIS WAS MISSING)
+            - Effect: Allow
+              Action:
+                - kinesis:GetRecords
+                - kinesis:GetShardIterator
+                - kinesis:DescribeStream
+                - kinesis:DescribeStreamSummary
+                - kinesis:ListShards
+                - kinesis:ListStreams
+              Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
+
 
   #################################################
   # Consumer Lambda
