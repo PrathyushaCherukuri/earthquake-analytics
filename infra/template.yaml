@@ -9,6 +9,21 @@ Parameters:
 Resources:
 
   #################################################
+  # DynamoDB (REQUIRED)
+  #################################################
+  EarthquakeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: earthquake-events
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: quake_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: quake_id
+          KeyType: HASH
+
+  #################################################
   # IAM Role for Step Functions
   #################################################
   StepFunctionRole:
@@ -19,7 +34,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: states.amazonaws.com
+              Service:
+                - states.amazonaws.com
+                - events.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: StepFunctionPolicy
@@ -31,6 +48,7 @@ Resources:
                   - lambda:InvokeFunction
                   - glue:StartJobRun
                   - sns:Publish
+                  - states:StartExecution
                 Resource: "*"
 
   #################################################
@@ -78,12 +96,11 @@ Resources:
           KINESIS_STREAM_NAME: prathyusha-earthquake-stream
 
   #################################################
-  # Consumer Lambda IAM Role
+  # Consumer Lambda IAM Role (FIXED)
   #################################################
   ConsumerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: earthquake-consumer-lambda-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -91,36 +108,42 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-    ManagedPolicyArns:
-      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-    Policies:
-      - PolicyName: ConsumerPermissions
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-            # DynamoDB write
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:DescribeTable
-              Resource: !GetAtt EarthquakeTable.Arn
+      Policies:
+        - PolicyName: ConsumerPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
 
-            # SNS publish
-            - Effect: Allow
-              Action:
-                - sns:Publish
-              Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+              # DynamoDB
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:DescribeTable
+                Resource: !GetAtt EarthquakeTable.Arn
 
-            # Kinesis read (REQUIRED for EventSourceMapping)
-            - Effect: Allow
-              Action:
-                - kinesis:GetRecords
-                - kinesis:GetShardIterator
-                - kinesis:DescribeStream
-                - kinesis:DescribeStreamSummary
-                - kinesis:ListShards
-                - kinesis:ListStreams
-              Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
+              # SNS
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
+
+              # Kinesis READ
+              - Effect: Allow
+                Action:
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:DescribeStream
+                  - kinesis:DescribeStreamSummary
+                  - kinesis:ListShards
+                  - kinesis:ListStreams
+                Resource: arn:aws:kinesis:eu-west-2:430006376054:stream/prathyusha-earthquake-stream
 
   #################################################
   # Consumer Lambda
@@ -137,6 +160,10 @@ Resources:
         S3Key: lambdas/consumer.zip
       Timeout: 60
       MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: earthquake-events
+          SNS_TOPIC_ARN: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
   #################################################
   # Kinesis → Consumer mapping
@@ -148,9 +175,10 @@ Resources:
       FunctionName: !Ref ConsumerLambda
       StartingPosition: LATEST
       BatchSize: 100
+      Enabled: true
 
   #################################################
-  # Step Function Definition
+  # Step Function
   #################################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -159,55 +187,13 @@ Resources:
       RoleArn: !GetAtt StepFunctionRole.Arn
       DefinitionString: |
         {
-          "Comment": "Earthquake end-to-end pipeline",
           "StartAt": "InvokeProducer",
           "States": {
             "InvokeProducer": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {
-                "FunctionName": "prathyusha-earthquake-producer",
-                "Payload": {}
-              },
-              "Retry": [{
-                "ErrorEquals": ["States.ALL"],
-                "IntervalSeconds": 5,
-                "MaxAttempts": 3,
-                "BackoffRate": 2
-              }],
-              "Catch": [{
-                "ErrorEquals": ["States.ALL"],
-                "Next": "NotifyFailure"
-              }],
-              "Next": "Wait"
-            },
-            "Wait": {
-              "Type": "Wait",
-              "Seconds": 60,
-              "Next": "RunRawToCurated"
-            },
-            "RunRawToCurated": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun",
-              "Parameters": {
-                "JobName": "prathyusha-earthquake-raw-to-curated"
-              },
-              "Next": "RunCuratedLatest"
-            },
-            "RunCuratedLatest": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::glue:startJobRun",
-              "Parameters": {
-                "JobName": "prathyusha-earthquake-raw-to-curated_latest"
-              },
-              "End": true
-            },
-            "NotifyFailure": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::sns:publish",
-              "Parameters": {
-                "TopicArn": "arn:aws:sns:eu-west-2:430006376054:earthquake-alerts",
-                "Message": "❌ Earthquake pipeline failed. Check CloudWatch logs."
+                "FunctionName": "prathyusha-earthquake-producer"
               },
               "End": true
             }
@@ -215,7 +201,7 @@ Resources:
         }
 
   #################################################
-  # Scheduled trigger
+  # EventBridge Schedule (AUTO RUN)
   #################################################
   EarthquakePipelineSchedule:
     Type: AWS::Events::Rule
