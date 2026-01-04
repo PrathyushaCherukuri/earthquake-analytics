@@ -162,7 +162,7 @@ Resources:
       MemorySize: 256
       Environment:
         Variables:
-          TABLE_NAME: earthquake-events
+          TABLE_NAME: prathyusha-earthquakes-latest
           SNS_TOPIC_ARN: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
   #################################################
