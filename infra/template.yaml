@@ -6,22 +6,12 @@ Parameters:
     Type: String
     Description: S3 bucket used by CodePipeline to store Lambda artifacts
 
-Resources:
+  ExistingDynamoDBTableName:
+    Type: String
+    Default: prathyusha-earthquakes-latest
+    Description: Existing DynamoDB table for earthquake data
 
-  #################################################
-  # DynamoDB
-  #################################################
-  EarthquakeTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: earthquake-events
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: quake_id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: quake_id
-          KeyType: HASH
+Resources:
 
   #################################################
   # IAM Role — Step Functions
@@ -121,12 +111,12 @@ Resources:
                   - logs:PutLogEvents
                 Resource: "*"
 
-              # DynamoDB
+              # DynamoDB (EXISTING TABLE)
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
                   - dynamodb:DescribeTable
-                Resource: !GetAtt EarthquakeTable.Arn
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ExistingDynamoDBTableName}
 
               # SNS
               - Effect: Allow
@@ -162,7 +152,7 @@ Resources:
       MemorySize: 256
       Environment:
         Variables:
-          TABLE_NAME: prathyusha-earthquakes-latest
+          TABLE_NAME: !Ref ExistingDynamoDBTableName
           SNS_TOPIC_ARN: arn:aws:sns:eu-west-2:430006376054:earthquake-alerts
 
   #################################################
@@ -178,7 +168,7 @@ Resources:
       Enabled: true
 
   #################################################
-  # Step Function — FULL LOGIC RESTORED
+  # Step Function
   #################################################
   EarthquakeStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -268,7 +258,7 @@ Resources:
         }
 
   #################################################
-  # EventBridge Schedule (AUTO RUN)
+  # EventBridge Schedule
   #################################################
   EarthquakePipelineSchedule:
     Type: AWS::Events::Rule
@@ -283,5 +273,3 @@ Resources:
 Outputs:
   StateMachineArn:
     Value: !Ref EarthquakeStateMachine
-  DynamoDBTable:
-    Value: !Ref EarthquakeTable
